@@ -1,16 +1,50 @@
+const path = require("path");
+const fs = require("fs");
+const candidateNodeDirs = [
+  path.join(__dirname, "node_modules"),
+  path.join(process.env.HOME || "", ".cli-proxy-api", "plugins", "node_modules"),
+  "/Users/saturno/Developer/plugin/node_modules",
+  "/Users/saturno/Developer/plugin/web-accounts/node_modules",
+  "/Users/saturno/Developer/cpamc-gemini-argon/node_modules",
+  "/usr/local/lib/node_modules",
+  "/opt/homebrew/lib/node_modules"
+];
+for (const dir of candidateNodeDirs) {
+  if (fs.existsSync(dir) && !module.paths.includes(dir)) {
+    module.paths.unshift(dir);
+  }
+}
+
 /**
  * Gemini Web Headless Runner for CPAMC web-accounts native plugin.
  * Executes turns via Google Chrome headless + Playwright without GUI windows.
  */
 
 const { chromium } = require("playwright-core");
-const fs = require("fs");
 const crypto = require("crypto");
 
 class SyntheticToolAdapter {
   constructor(options = {}) {
     this.tagOpen = options.tagOpen || "```tool_call";
     this.tagClose = options.tagClose || "```";
+  }
+
+  _extractMessageText(content) {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .map(part => {
+          if (typeof part === "string") return part;
+          if (part && typeof part.text === "string") return part.text;
+          return "";
+        })
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (content && typeof content === "object" && typeof content.text === "string") {
+      return content.text;
+    }
+    return "";
   }
 
   buildPrompt({ messages, tools, systemInstruction = "" }) {
@@ -23,10 +57,11 @@ class SyntheticToolAdapter {
     }
     promptParts.push("[CONVERSATION HISTORY]");
     for (const msg of messages) {
+      const text = this._extractMessageText(msg.content);
       if (msg.role === "system") {
-        promptParts.push("System: " + (msg.content || ""));
+        promptParts.push("System: " + text);
       } else if (msg.role === "user") {
-        promptParts.push("User: " + (msg.content || ""));
+        promptParts.push("User: " + text);
       } else if (msg.role === "assistant") {
         if (msg.tool_calls && msg.tool_calls.length > 0) {
           const callsFormatted = msg.tool_calls.map(tc => {
@@ -35,10 +70,10 @@ class SyntheticToolAdapter {
           }).join("\n");
           promptParts.push("Assistant (Tool Action):\n" + callsFormatted);
         } else {
-          promptParts.push("Assistant: " + (msg.content || ""));
+          promptParts.push("Assistant: " + text);
         }
       } else if (msg.role === "tool") {
-        promptParts.push("Tool Output [id: " + (msg.tool_call_id || "default") + "]:\n" + (msg.content || ""));
+        promptParts.push("Tool Output [id: " + (msg.tool_call_id || "default") + "]:\n" + text);
       }
     }
     promptParts.push("\nAssistant:");
@@ -73,11 +108,71 @@ class SyntheticToolAdapter {
       "5. Output the tool call block immediately without unnecessary conversational preamble.";
   }
 
+  _extractFirstJsonObject(text) {
+    const startIdx = text.indexOf("{");
+    if (startIdx === -1) return null;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = startIdx; i < text.length; i++) {
+      const char = text[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (char === "\\") {
+        escape = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (!inString) {
+        if (char === "{") depth++;
+        else if (char === "}") {
+          depth--;
+          if (depth === 0) {
+            return {
+              jsonStr: text.slice(startIdx, i + 1),
+              startIndex: startIdx,
+              endIndex: i + 1
+            };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   parseResponse(rawText) {
     const regex = new RegExp(this.escapeRegex(this.tagOpen) + "\\s*([\\s\\S]*?)\\s*" + this.escapeRegex(this.tagClose), "i");
     const match = rawText.match(regex);
+    let jsonStr = null;
+    let textBefore = "";
+    let textAfter = "";
 
-    if (!match) {
+    if (match) {
+      jsonStr = match[1].trim();
+      textBefore = rawText.substring(0, match.index).trim();
+      textAfter = rawText.substring(match.index + match[0].length).trim();
+    } else {
+      const obj = this._extractFirstJsonObject(rawText);
+      if (obj) {
+        try {
+          const testParse = JSON.parse(obj.jsonStr);
+          if (testParse && typeof testParse === "object" && testParse.name) {
+            jsonStr = obj.jsonStr;
+            textBefore = rawText.substring(0, obj.startIndex)
+              .replace(/(?:Fragmento de código|Code snippet)\s*$/i, "")
+              .trim();
+            textAfter = rawText.substring(obj.endIndex).trim();
+          }
+        } catch (e) {}
+      }
+    }
+
+    if (!jsonStr) {
       return {
         role: "assistant",
         content: rawText.trim(),
@@ -86,7 +181,6 @@ class SyntheticToolAdapter {
       };
     }
 
-    const jsonStr = match[1].trim();
     let parsedCall = null;
     try {
       parsedCall = JSON.parse(jsonStr);
@@ -108,8 +202,6 @@ class SyntheticToolAdapter {
       };
     }
 
-    const textBefore = rawText.substring(0, match.index).trim();
-    const textAfter = rawText.substring(match.index + match[0].length).trim();
     const commentary = [textBefore, textAfter].filter(Boolean).join("\n");
 
     const callId = "call_" + Math.random().toString(36).substring(2, 11);
@@ -137,26 +229,11 @@ class SyntheticToolAdapter {
   }
 }
 
-function parseStreamResponse(raw) {
-  const lines = raw.split(/\r?\n/);
-  let lastText = "";
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line === ")]}'" || /^\d+$/.test(line)) continue;
-    if (!line.includes("wrb.fr")) continue;
-    try {
-      const arr = JSON.parse(line);
-      if (!Array.isArray(arr) || !Array.isArray(arr[0]) || arr[0][0] !== "wrb.fr") continue;
-      const payload = arr[0]?.[2];
-      if (typeof payload !== "string") continue;
-      const inner = JSON.parse(payload);
-      const responseArray = inner?.[4]?.[0]?.[1];
-      if (!Array.isArray(responseArray)) continue;
-      const text = responseArray.filter(c => typeof c === "string").join("");
-      if (text) lastText = text;
-    } catch (e) {}
-  }
-  return lastText;
+function cleanGeminiOutput(text) {
+  if (!text) return "";
+  let cleaned = text.trim();
+  cleaned = cleaned.replace(/^(Gemini\s+(?:dijo|said)\s*[:\-–—]?\s*)/i, "").trim();
+  return cleaned;
 }
 
 function parseCookiesInput(raw) {
@@ -257,159 +334,212 @@ async function main() {
     ]
   };
   if (execPath) launchOpts.executablePath = execPath;
-  const browser = await chromium.launch(launchOpts);
+  let browser = null;
 
-  const ctx = await browser.newContext({
-    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15"
-  });
-
-  // Inject cookies
-  for (const c of rawCookies) {
-    if (!c.name || typeof c.value !== "string" || c.name.startsWith("__Host-")) continue;
-    let domain = c.domain || ".google.com";
-    if (!domain.startsWith(".")) domain = "." + domain;
-    let secure = Boolean(c.secure);
-    if (c.name.startsWith("__Secure-")) secure = true;
-
-    try {
-      await ctx.addCookies([{
-        name: c.name,
-        value: c.value,
-        domain,
-        path: c.path || "/",
-        secure,
-        httpOnly: Boolean(c.httpOnly)
-      }]);
-    } catch (e) {}
-  }
-
-  const page = await ctx.newPage();
-  let streamRaw = "";
-  let resolveDone;
-  const donePromise = new Promise(res => { resolveDone = res; });
-
-  page.on("response", async (resp) => {
-    if (resp.url().includes("BardFrontendService/StreamGenerate")) {
+  const cleanup = async () => {
+    if (browser) {
       try {
-        streamRaw = await resp.text();
-        resolveDone();
+        await browser.close();
       } catch (e) {}
+      browser = null;
     }
-  });
-
-  await page.goto("https://gemini.google.com/app", { waitUntil: "domcontentloaded", timeout: 30000 });
-  await page.waitForTimeout(2000);
-
-  // Model selection if requested
-  const switcher = await page.waitForSelector(".input-area-switch", { timeout: 15000 });
-  const currentSwitcherText = (await switcher.innerText()).trim();
-
-  let targetModeSubstring = "";
-  if (upstreamModel.includes("argon") || upstreamModel.includes("4")) {
-    targetModeSubstring = "Argon";
-  } else if (upstreamModel.includes("pro")) {
-    targetModeSubstring = "Pro";
-  } else if (upstreamModel.includes("flash-lite")) {
-    targetModeSubstring = "Flash-Lite";
-  } else if (upstreamModel.includes("flash")) {
-    targetModeSubstring = "Flash";
-  }
-
-  if (targetModeSubstring && !currentSwitcherText.includes(targetModeSubstring)) {
-    try {
-      await switcher.click();
-      await page.waitForTimeout(600);
-      const option = await page.waitForSelector("[role='menuitem']:has-text('" + targetModeSubstring + "')", { timeout: 4000 });
-      if (option) {
-        await page.evaluate(el => el.click(), option);
-        await page.waitForTimeout(1000);
-      }
-    } catch (err) {
-      // If mode switcher fails, proceed with default active mode
-    }
-  }
-
-  // Build prompt
-  const hasTools = Array.isArray(tools) && tools.length > 0;
-  const adapter = new SyntheticToolAdapter();
-  let promptText = "";
-  if (hasTools) {
-    promptText = adapter.buildPrompt({ messages, tools });
-  } else {
-    // Simple multi-turn transcript
-    const userMsgs = messages.filter(m => m.role === "user");
-    if (messages.length === 1 && userMsgs.length === 1) {
-      promptText = userMsgs[0].content || "";
-    } else {
-      promptText = messages.map(m => (m.role === "assistant" ? "Assistant: " : m.role === "user" ? "User: " : "System: ") + (m.content || "")).join("\n\n") + "\n\nAssistant:";
-    }
-  }
-
-  const editor = await page.waitForSelector(".ql-editor, [contenteditable='true']", { timeout: 15000 });
-  await editor.click();
-
-  await page.evaluate((t) => {
-    const el = document.querySelector(".ql-editor, [contenteditable='true']");
-    el.focus();
-    document.execCommand("insertText", false, t);
-  }, promptText);
-
-  await page.waitForTimeout(400);
-
-  const sendBtn = await page.$("button[aria-label*='Send'], button[aria-label*='Enviar'], .send-button");
-  if (sendBtn && await sendBtn.isEnabled()) {
-    await sendBtn.click();
-  } else {
-    await page.keyboard.press("Enter");
-  }
-
-  await Promise.race([
-    donePromise,
-    page.waitForTimeout(40000)
-  ]);
-
-  if (!streamRaw) {
-    await browser.close();
-    console.error(JSON.stringify({ error: "No StreamGenerate response received from Gemini Web" }));
-    process.exit(1);
-  }
-
-  const rawOutputText = parseStreamResponse(streamRaw);
-  let finalChoice = {};
-
-  if (hasTools) {
-    const parsed = adapter.parseResponse(rawOutputText);
-    finalChoice = {
-      index: 0,
-      message: {
-        role: "assistant",
-        content: parsed.content,
-        tool_calls: parsed.tool_calls
-      },
-      finish_reason: parsed.finish_reason
-    };
-  } else {
-    finalChoice = {
-      index: 0,
-      message: {
-        role: "assistant",
-        content: rawOutputText.trim()
-      },
-      finish_reason: "stop"
-    };
-  }
-
-  const completion = {
-    id: "chatcmpl-gw-" + crypto.randomUUID().slice(0, 12),
-    object: "chat.completion",
-    created: Math.floor(Date.now() / 1000),
-    model: requestedModel,
-    choices: [finalChoice],
-    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
   };
 
-  await browser.close();
-  console.log(JSON.stringify(completion));
+  process.on("SIGINT", async () => {
+    await cleanup();
+    process.exit(130);
+  });
+  process.on("SIGTERM", async () => {
+    await cleanup();
+    process.exit(143);
+  });
+
+  try {
+    browser = await chromium.launch(launchOpts);
+
+    const ctx = await browser.newContext({
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15"
+    });
+
+    // Inject cookies
+    for (const c of rawCookies) {
+      if (!c.name || typeof c.value !== "string" || c.name.startsWith("__Host-")) continue;
+      let domain = c.domain || ".google.com";
+      if (!domain.startsWith(".")) domain = "." + domain;
+      let secure = Boolean(c.secure);
+      if (c.name.startsWith("__Secure-")) secure = true;
+
+      try {
+        await ctx.addCookies([{
+          name: c.name,
+          value: c.value,
+          domain,
+          path: c.path || "/",
+          secure,
+          httpOnly: Boolean(c.httpOnly)
+        }]);
+      } catch (e) {}
+    }
+
+    const page = await ctx.newPage();
+
+    await page.goto("https://gemini.google.com/app", { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForTimeout(2000);
+
+    // Model selection if requested
+    const switcher = await page.waitForSelector(".input-area-switch", { timeout: 8000 }).catch(() => null);
+    if (switcher) {
+      const currentSwitcherText = (await switcher.innerText().catch(() => "")).trim();
+
+      let targetModeSubstring = "";
+      if (upstreamModel.includes("argon") || upstreamModel.includes("4")) {
+        targetModeSubstring = "Argon";
+      } else if (upstreamModel.includes("pro")) {
+        targetModeSubstring = "Pro";
+      } else if (upstreamModel.includes("flash-lite")) {
+        targetModeSubstring = "Flash-Lite";
+      } else if (upstreamModel.includes("flash")) {
+        targetModeSubstring = "Flash";
+      }
+
+      if (targetModeSubstring && !currentSwitcherText.includes(targetModeSubstring)) {
+        try {
+          await switcher.click();
+          await page.waitForTimeout(600);
+          const option = await page.waitForSelector("[role='menuitem']:has-text('" + targetModeSubstring + "')", { timeout: 4000 }).catch(() => null);
+          if (option) {
+            await page.evaluate(el => el.click(), option);
+            await page.waitForTimeout(1000);
+          }
+        } catch (err) {
+          // If mode switcher fails, proceed with default active mode
+        }
+      }
+    }
+
+    // Build prompt
+    const hasTools = Array.isArray(tools) && tools.length > 0;
+    const adapter = new SyntheticToolAdapter();
+    let promptText = "";
+    if (hasTools) {
+      promptText = adapter.buildPrompt({ messages, tools });
+    } else {
+      // Simple multi-turn transcript
+      const userMsgs = messages.filter(m => m.role === "user");
+      if (messages.length === 1 && userMsgs.length === 1) {
+        promptText = adapter._extractMessageText(userMsgs[0].content);
+      } else {
+        promptText = messages.map(m => (m.role === "assistant" ? "Assistant: " : m.role === "user" ? "User: " : "System: ") + adapter._extractMessageText(m.content)).join("\n\n") + "\n\nAssistant:";
+      }
+    }
+
+    const editor = await page.waitForSelector(".ql-editor, [contenteditable='true']", { timeout: 15000 });
+    await editor.click();
+
+    await page.evaluate((t) => {
+      const el = document.querySelector(".ql-editor, [contenteditable='true']");
+      if (el) {
+        el.focus();
+        document.execCommand("insertText", false, t);
+      }
+    }, promptText);
+
+    await page.waitForTimeout(400);
+
+    const sendBtn = await page.$("button[aria-label*='Send'], button[aria-label*='Enviar'], .send-button");
+    if (sendBtn && (await sendBtn.isEnabled().catch(() => false))) {
+      await sendBtn.click();
+    } else {
+      await page.keyboard.press("Enter");
+    }
+
+    // Response Extraction from DOM
+    await page.waitForSelector("model-response, .presented-response-container", { timeout: 15000 });
+
+    const pollStart = Date.now();
+    const maxTimeoutMs = 70000;
+    let rawResponseText = "";
+
+    while (Date.now() - pollStart < maxTimeoutMs) {
+      const stopBtn = await page.$("button[aria-label*='Stop'], button[aria-label*='Detener'], [aria-label*='Detener respuesta'], .stop-button");
+      const isGenerating = stopBtn !== null && (await stopBtn.isVisible().catch(() => false));
+
+      const currentText = await page.evaluate(() => {
+        const responses = document.querySelectorAll("model-response, .presented-response-container");
+        if (!responses.length) return "";
+        const lastResponse = responses[responses.length - 1];
+        const contentEl = lastResponse.querySelector("message-content, .markdown, .model-response-text") || lastResponse;
+        return contentEl ? (contentEl.innerText || "").trim() : "";
+      });
+
+      if (!isGenerating && currentText.length > 0) {
+        await page.waitForTimeout(500);
+        const settledText = await page.evaluate(() => {
+          const responses = document.querySelectorAll("model-response, .presented-response-container");
+          if (!responses.length) return "";
+          const lastResponse = responses[responses.length - 1];
+          const contentEl = lastResponse.querySelector("message-content, .markdown, .model-response-text") || lastResponse;
+          return contentEl ? (contentEl.innerText || "").trim() : "";
+        });
+        rawResponseText = settledText || currentText;
+        break;
+      }
+
+      await page.waitForTimeout(500);
+    }
+
+    if (!rawResponseText) {
+      rawResponseText = await page.evaluate(() => {
+        const responses = document.querySelectorAll("model-response, .presented-response-container");
+        if (!responses.length) return "";
+        const lastResponse = responses[responses.length - 1];
+        const contentEl = lastResponse.querySelector("message-content, .markdown, .model-response-text") || lastResponse;
+        return contentEl ? (contentEl.innerText || "").trim() : "";
+      });
+    }
+
+    const cleanText = cleanGeminiOutput(rawResponseText);
+    if (!cleanText) {
+      throw new Error("No response text captured from Gemini Web within 70s timeout");
+    }
+
+    let finalChoice = {};
+
+    if (hasTools) {
+      const parsed = adapter.parseResponse(cleanText);
+      finalChoice = {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: parsed.content,
+          tool_calls: parsed.tool_calls
+        },
+        finish_reason: parsed.finish_reason
+      };
+    } else {
+      finalChoice = {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: cleanText.trim()
+        },
+        finish_reason: "stop"
+      };
+    }
+
+    const completion = {
+      id: "chatcmpl-gw-" + crypto.randomUUID().slice(0, 12),
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: requestedModel,
+      choices: [finalChoice],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+    };
+
+    console.log(JSON.stringify(completion));
+  } finally {
+    await cleanup();
+  }
 }
 
 main().catch(err => {

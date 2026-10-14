@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +16,10 @@ import (
 	"time"
 )
 
-const geminiTimeout = 120 * time.Second
+const (
+	geminiTimeout = 120 * time.Second
+	daemonTimeout = 90 * time.Second
+)
 
 type chatMessage struct {
 	Role       string          `json:"role"`
@@ -39,14 +44,14 @@ func validateRequest(body chatRequest, model string) error {
 	return nil
 }
 
-func resolveGeminiRunnerPath() string {
-	if p := os.Getenv("GEMINI_RUNNER_PATH"); p != "" {
+func resolveScriptPath(name string) string {
+	if p := os.Getenv("GEMINI_SCRIPT_PATH"); p != "" {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
 	if cur, err := os.Getwd(); err == nil {
-		for _, rel := range []string{"gemini_runner.js", "cpamc-gemini-argon/gemini_runner.js"} {
+		for _, rel := range []string{name, filepath.Join("cpamc-gemini-argon", name)} {
 			candidate := filepath.Join(cur, rel)
 			if _, err := os.Stat(candidate); err == nil {
 				return candidate
@@ -55,10 +60,10 @@ func resolveGeminiRunnerPath() string {
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		for _, sub := range []string{
-			filepath.Join(".cli-proxy-api", "plugins", "gemini_runner.js"),
-			filepath.Join(".cli-proxy-api", "plugins", "darwin", "arm64", "gemini_runner.js"),
-			filepath.Join(".cli-proxy-api", "plugins", "linux", "amd64", "gemini_runner.js"),
-			filepath.Join(".cli-proxy-api", "plugins", "linux", "arm64", "gemini_runner.js"),
+			filepath.Join(".cli-proxy-api", "plugins", name),
+			filepath.Join(".cli-proxy-api", "plugins", "darwin", "arm64", name),
+			filepath.Join(".cli-proxy-api", "plugins", "linux", "amd64", name),
+			filepath.Join(".cli-proxy-api", "plugins", "linux", "arm64", name),
 		} {
 			candidate := filepath.Join(home, sub)
 			if _, err := os.Stat(candidate); err == nil {
@@ -66,7 +71,7 @@ func resolveGeminiRunnerPath() string {
 			}
 		}
 	}
-	return "/Users/saturno/Developer/cpamc-gemini-argon/gemini_runner.js"
+	return filepath.Join("/Users/saturno/Developer/cpamc-gemini-argon", name)
 }
 
 func resolveNodeBin() string {
@@ -79,6 +84,85 @@ func resolveNodeBin() string {
 		}
 	}
 	return "node"
+}
+
+func postDaemon(ctx context.Context, payload []byte) ([]byte, error) {
+	port := os.Getenv("GEMINI_DAEMON_PORT")
+	if port == "" {
+		port = "8319"
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%s/generate", port)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: daemonTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		var errEnv map[string]any
+		if json.Unmarshal(body, &errEnv) == nil {
+			if errMsg, ok := errEnv["error"].(string); ok && errMsg != "" {
+				return nil, errors.New("daemon error: " + errMsg)
+			}
+		}
+		return nil, fmt.Errorf("daemon returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	return body, nil
+}
+
+func ensureDaemonStarted() error {
+	daemonPath := resolveScriptPath("gemini_daemon.js")
+	if _, err := os.Stat(daemonPath); err != nil {
+		return err
+	}
+	nodeBin := resolveNodeBin()
+	cmd := exec.Command(nodeBin, daemonPath)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	return cmd.Start()
+}
+
+func runStandalone(ctx context.Context, inBytes []byte) ([]byte, error) {
+	runnerPath := resolveScriptPath("gemini_runner.js")
+	if _, err := os.Stat(runnerPath); err != nil {
+		return nil, errors.New("gemini_runner.js not found in CPAMC plugins directory")
+	}
+	nodeBin := resolveNodeBin()
+	cmd := exec.CommandContext(ctx, nodeBin, runnerPath)
+	cmd.Stdin = bytes.NewReader(inBytes)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		errStr := strings.TrimSpace(stderr.String())
+		if errStr == "" {
+			errStr = err.Error()
+		}
+		return nil, fmt.Errorf("gemini runner error: %s", errStr)
+	}
+
+	outBytes := bytes.TrimSpace(stdout.Bytes())
+	if len(outBytes) == 0 {
+		return nil, errors.New("Gemini runner returned empty output")
+	}
+	var envelope map[string]any
+	if json.Unmarshal(outBytes, &envelope) != nil {
+		return nil, errors.New("Gemini runner returned invalid JSON")
+	}
+	if errMsg, isErr := envelope["error"].(string); isErr && errMsg != "" {
+		return nil, errors.New("Gemini runner error: " + errMsg)
+	}
+	return outBytes, nil
 }
 
 func execute(ctx context.Context, req executorRequest, isStream bool) (executorResponse, error) {
@@ -108,12 +192,6 @@ func execute(ctx context.Context, req executorRequest, isStream bool) (executorR
 }
 
 func runGemini(ctx context.Context, credential string, body chatRequest, upstreamModel, requestedModel string) ([]byte, error) {
-	runnerPath := resolveGeminiRunnerPath()
-	if _, err := os.Stat(runnerPath); err != nil {
-		return nil, errors.New("gemini_runner.js not found: ensure gemini_runner.js is placed in CPAMC plugins directory")
-	}
-	nodeBin := resolveNodeBin()
-
 	runnerInput := map[string]any{
 		"model":          requestedModel,
 		"upstream_model": upstreamModel,
@@ -132,32 +210,20 @@ func runGemini(ctx context.Context, credential string, body chatRequest, upstrea
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, nodeBin, runnerPath)
-	cmd.Stdin = bytes.NewReader(inBytes)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		errStr := strings.TrimSpace(stderr.String())
-		if errStr == "" {
-			errStr = err.Error()
-		}
-		return nil, fmt.Errorf("gemini runner error: %s", errStr)
+	// 1. Try background daemon (warm headless instance)
+	if outBytes, err := postDaemon(ctx, inBytes); err == nil && len(outBytes) > 0 {
+		return outBytes, nil
 	}
 
-	outBytes := bytes.TrimSpace(stdout.Bytes())
-	if len(outBytes) == 0 {
-		return nil, errors.New("Gemini runner returned empty output")
+	// 2. If daemon not running, start it and retry once
+	_ = ensureDaemonStarted()
+	time.Sleep(600 * time.Millisecond)
+	if outBytes, err := postDaemon(ctx, inBytes); err == nil && len(outBytes) > 0 {
+		return outBytes, nil
 	}
-	var envelope map[string]any
-	if json.Unmarshal(outBytes, &envelope) != nil {
-		return nil, errors.New("Gemini runner returned invalid JSON")
-	}
-	if errMsg, isErr := envelope["error"].(string); isErr && errMsg != "" {
-		return nil, errors.New("Gemini runner error: " + errMsg)
-	}
-	return outBytes, nil
+
+	// 3. Fallback: Standalone runner invocation
+	return runStandalone(ctx, inBytes)
 }
 
 func geminiStreamChunks(payload []byte, model string) ([]streamChunk, error) {
