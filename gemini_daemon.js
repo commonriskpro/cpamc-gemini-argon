@@ -1,3 +1,11 @@
+
+function cleanGeminiOutput(text) {
+  if (!text) return "";
+  let cleaned = text.trim();
+  cleaned = cleaned.replace(/^(Gemini\s+(?:dijo|said)\s*[:\-  ]?\s*)/i, "").trim();
+  return cleaned;
+}
+
 const path = require("path");
 const fs = require("fs");
 const candidateNodeDirs = [
@@ -277,11 +285,11 @@ class BrowserDaemon {
 
     this.browser = await chromium.launch(launchOpts);
     this.context = await this.browser.newContext({
-      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15"
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
     });
 
     for (const c of rawCookies) {
-      if (!c.name || typeof c.value !== "string" || c.name.startsWith("__Host-")) continue;
+      if (!c.name || typeof c.value !== "string" || c.name.startsWith("__Host-") || c.name === "AEC" || c.name === "NID") continue;
       let domain = c.domain || ".google.com";
       if (!domain.startsWith(".")) domain = "." + domain;
       let secure = Boolean(c.secure);
@@ -302,6 +310,14 @@ class BrowserDaemon {
     this.page = await this.context.newPage();
     await this.page.goto("https://gemini.google.com/app", { waitUntil: "domcontentloaded", timeout: 30000 });
     await this.page.waitForTimeout(2000);
+
+    const isSignedOut = await this.page.evaluate(() => {
+      const text = document.body ? (document.body.innerText || "") : "";
+      return document.body.classList.contains("viewer-signed-out") || text.includes("Sign in to save activity") || text.includes("Inicia sesion");
+    });
+    if (isSignedOut) {
+      throw new Error("Google session expired or signed out. Please log into gemini.google.com in your browser and update the CPAMC auth credentials.");
+    }
     this.currentCredHash = credHash;
   }
 
@@ -312,20 +328,7 @@ class BrowserDaemon {
     const requestedModel = model || "web-gemini/gemini-4-argon";
     const upstreamModel = upstream_model || "gemini-4-argon";
 
-    let streamRaw = "";
-    let resolveDone;
-    const donePromise = new Promise(res => { resolveDone = res; });
 
-    const responseHandler = async (resp) => {
-      if (resp.url().includes("BardFrontendService/StreamGenerate")) {
-        try {
-          streamRaw = await resp.text();
-          resolveDone();
-        } catch (e) {}
-      }
-    };
-
-    this.page.on("response", responseHandler);
 
     try {
       // Check mode switcher
@@ -343,6 +346,10 @@ class BrowserDaemon {
             await this.page.waitForTimeout(400);
             const option = await this.page.waitForSelector("[role='menuitem']:has-text('" + targetSubstring + "')", { timeout: 3000 });
             if (option) {
+              const isDisabled = await option.evaluate(el => el.classList.contains("disabled") || !!el.querySelector(".disabled")).catch(() => false);
+              if (isDisabled) {
+                throw new Error("Gemini 4 Argon is disabled on this Google account. Please ensure your account has active Argon access.");
+              }
               await this.page.evaluate(el => el.click(), option);
               await this.page.waitForTimeout(600);
             }
@@ -358,9 +365,9 @@ class BrowserDaemon {
       } else {
         const userMsgs = messages.filter(m => m.role === "user");
         if (messages.length === 1 && userMsgs.length === 1) {
-          promptText = userMsgs[0].content || "";
+          promptText = adapter._extractMessageText(userMsgs[0].content);
         } else {
-          promptText = messages.map(m => (m.role === "assistant" ? "Assistant: " : m.role === "user" ? "User: " : "System: ") + (m.content || "")).join("\n\n") + "\n\nAssistant:";
+          promptText = messages.map(m => (m.role === "assistant" ? "Assistant: " : m.role === "user" ? "User: " : "System: ") + adapter._extractMessageText(m.content)).join("\n\n") + "\n\nAssistant:";
         }
       }
 
@@ -382,20 +389,60 @@ class BrowserDaemon {
         await this.page.keyboard.press("Enter");
       }
 
-      await Promise.race([
-        donePromise,
-        this.page.waitForTimeout(45000)
-      ]);
+      // Response Extraction from DOM
+      await this.page.waitForSelector("model-response, .presented-response-container", { timeout: 15000 });
 
-      if (!streamRaw) {
-        throw new Error("No StreamGenerate response received from Gemini Web");
+      const pollStart = Date.now();
+      const maxTimeoutMs = 70000;
+      let rawResponseText = "";
+
+      while (Date.now() - pollStart < maxTimeoutMs) {
+        const stopBtn = await this.page.$("button[aria-label*='Stop'], button[aria-label*='Detener'], [aria-label*='Detener respuesta'], .stop-button");
+        const isGenerating = stopBtn !== null && (await stopBtn.isVisible().catch(() => false));
+
+        const currentText = await this.page.evaluate(() => {
+          const responses = document.querySelectorAll("model-response, .presented-response-container");
+          if (!responses.length) return "";
+          const lastResponse = responses[responses.length - 1];
+          const contentEl = lastResponse.querySelector("message-content, .markdown, .model-response-text") || lastResponse;
+          return contentEl ? (contentEl.innerText || "").trim() : "";
+        });
+
+        if (!isGenerating && currentText.length > 0) {
+          await this.page.waitForTimeout(500);
+          const settledText = await this.page.evaluate(() => {
+            const responses = document.querySelectorAll("model-response, .presented-response-container");
+            if (!responses.length) return "";
+            const lastResponse = responses[responses.length - 1];
+            const contentEl = lastResponse.querySelector("message-content, .markdown, .model-response-text") || lastResponse;
+            return contentEl ? (contentEl.innerText || "").trim() : "";
+          });
+          rawResponseText = settledText || currentText;
+          break;
+        }
+
+        await this.page.waitForTimeout(500);
       }
 
-      const rawOutputText = parseStreamResponse(streamRaw);
+      if (!rawResponseText) {
+        rawResponseText = await this.page.evaluate(() => {
+          const responses = document.querySelectorAll("model-response, .presented-response-container");
+          if (!responses.length) return "";
+          const lastResponse = responses[responses.length - 1];
+          const contentEl = lastResponse.querySelector("message-content, .markdown, .model-response-text") || lastResponse;
+          return contentEl ? (contentEl.innerText || "").trim() : "";
+        });
+      }
+
+      const cleanText = cleanGeminiOutput(rawResponseText);
+      if (!cleanText) {
+        throw new Error("No response text captured from Gemini Web within 70s timeout");
+      }
+
       let finalChoice = {};
 
       if (hasTools) {
-        const parsed = adapter.parseResponse(rawOutputText);
+        const parsed = adapter.parseResponse(cleanText);
         finalChoice = {
           index: 0,
           message: {
@@ -410,7 +457,7 @@ class BrowserDaemon {
           index: 0,
           message: {
             role: "assistant",
-            content: rawOutputText.trim()
+            content: cleanText.trim()
           },
           finish_reason: "stop"
         };
@@ -425,9 +472,6 @@ class BrowserDaemon {
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
       };
     } finally {
-      if (this.page) {
-        this.page.off("response", responseHandler);
-      }
       this._resetIdleTimer();
     }
   }

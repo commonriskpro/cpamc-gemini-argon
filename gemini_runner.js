@@ -358,12 +358,12 @@ async function main() {
     browser = await chromium.launch(launchOpts);
 
     const ctx = await browser.newContext({
-      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15"
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
     });
 
     // Inject cookies
     for (const c of rawCookies) {
-      if (!c.name || typeof c.value !== "string" || c.name.startsWith("__Host-")) continue;
+      if (!c.name || typeof c.value !== "string" || c.name.startsWith("__Host-") || c.name === "AEC" || c.name === "NID") continue;
       let domain = c.domain || ".google.com";
       if (!domain.startsWith(".")) domain = "." + domain;
       let secure = Boolean(c.secure);
@@ -385,6 +385,14 @@ async function main() {
 
     await page.goto("https://gemini.google.com/app", { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(2000);
+
+    const isSignedOut = await page.evaluate(() => {
+      const text = document.body ? (document.body.innerText || "") : "";
+      return document.body.classList.contains("viewer-signed-out") || text.includes("Sign in to save activity") || text.includes("Inicia sesion");
+    });
+    if (isSignedOut) {
+      throw new Error("Google session expired or signed out. Please log into gemini.google.com in your browser and update the CPAMC auth credentials.");
+    }
 
     // Model selection if requested
     const switcher = await page.waitForSelector(".input-area-switch", { timeout: 8000 }).catch(() => null);
@@ -408,6 +416,10 @@ async function main() {
           await page.waitForTimeout(600);
           const option = await page.waitForSelector("[role='menuitem']:has-text('" + targetModeSubstring + "')", { timeout: 4000 }).catch(() => null);
           if (option) {
+            const isDisabled = await option.evaluate(el => el.classList.contains("disabled") || !!el.querySelector(".disabled")).catch(() => false);
+            if (isDisabled) {
+              throw new Error("Gemini 4 Argon is disabled on this Google account. Please ensure your account has active Argon access.");
+            }
             await page.evaluate(el => el.click(), option);
             await page.waitForTimeout(1000);
           }

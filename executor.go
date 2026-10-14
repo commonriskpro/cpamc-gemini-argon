@@ -23,7 +23,7 @@ const (
 
 type chatMessage struct {
 	Role       string          `json:"role"`
-	Content    string          `json:"content"`
+	Content    any             `json:"content"`
 	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 }

@@ -99,7 +99,7 @@ import (
 
 const (
 	abiVersion    = 1
-	schemaVersion = 6
+	schemaVersion uint32 = 6
 	providerID    = "gemini-argon"
 	maxRPCBytes   = 32 << 20
 	upstreamRepo  = "https://github.com/commonriskpro/cpamc-gemini-argon"
@@ -135,11 +135,11 @@ type rpcError struct {
 }
 
 type metadata struct {
-	Name             string `json:"name"`
-	Version          string `json:"version"`
-	Author           string `json:"author"`
-	Description      string `json:"description"`
-	GitHubRepository string `json:"github_repository"`
+	Name             string `json:"Name"`
+	Version          string `json:"Version"`
+	Author           string `json:"Author"`
+	Description      string `json:"Description,omitempty"`
+	GitHubRepository string `json:"GitHubRepository"`
 }
 
 type capabilities struct {
@@ -148,12 +148,12 @@ type capabilities struct {
 	AuthProvider       bool     `json:"auth_provider"`
 	Executor           bool     `json:"executor"`
 	ExecutorModelScope string   `json:"executor_model_scope"`
-	ExecutorInput      []string `json:"executor_input"`
-	ExecutorOutput     []string `json:"executor_output"`
+	ExecutorInput      []string `json:"executor_input_formats"`
+	ExecutorOutput     []string `json:"executor_output_formats"`
 }
 
 type registration struct {
-	SchemaVersion int          `json:"schema_version"`
+	SchemaVersion uint32       `json:"schema_version"`
 	Metadata      metadata     `json:"metadata"`
 	Capabilities  capabilities `json:"capabilities"`
 }
@@ -367,7 +367,7 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 				ModelProvider:      true,
 				AuthProvider:       true,
 				Executor:           true,
-				ExecutorModelScope: "all",
+				ExecutorModelScope: "oauth",
 				ExecutorInput:      []string{"chat-completions"},
 				ExecutorOutput:     []string{"chat-completions"},
 			},
