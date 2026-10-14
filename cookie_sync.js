@@ -134,3 +134,62 @@ module.exports = {
   injectCookies,
   getBestCookies
 };
+
+function getStatusFilePath() {
+  return path.join(process.env.HOME || "", ".cli-proxy-api", "gemini_argon_status.json");
+}
+
+function getArgonStatus() {
+  const p = getStatusFilePath();
+  if (fs.existsSync(p)) {
+    try {
+      return JSON.parse(fs.readFileSync(p, "utf8"));
+    } catch (e) {}
+  }
+  return { accounts: {}, last_updated: Date.now() };
+}
+
+function recordAccountStatus(email, authuser, isRateLimited, resetTime) {
+  const statusFile = getStatusFilePath();
+  let data = getArgonStatus();
+  if (!data.accounts) data.accounts = {};
+  const key = email || ("u" + authuser);
+  data.accounts[key] = {
+    email: email || "",
+    authuser: Number(authuser),
+    status: isRateLimited ? "rate_limited" : "active",
+    reset_time: resetTime || null,
+    last_checked: Date.now()
+  };
+  data.last_updated = Date.now();
+  try {
+    fs.writeFileSync(statusFile, JSON.stringify(data, null, 2), "utf8");
+  } catch (e) {}
+}
+
+function getAllArgonAccounts() {
+  const authDir = path.join(process.env.HOME || "", ".cli-proxy-api", "auths");
+  if (!fs.existsSync(authDir)) return [];
+  try {
+    const files = fs.readdirSync(authDir).filter(f => f.startsWith("gemini-argon-") && f.endsWith(".json"));
+    const accounts = [];
+    for (const f of files) {
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(authDir, f), "utf8"));
+        accounts.push({
+          email: data.email || f.replace("gemini-argon-", "").replace(".json", ""),
+          authuser: data.authuser !== undefined ? Number(data.authuser) : 0,
+          label: data.label || "",
+          disabled: Boolean(data.disabled)
+        });
+      } catch (e) {}
+    }
+    return accounts.sort((a, b) => a.authuser - b.authuser);
+  } catch (e) {
+    return [];
+  }
+}
+
+module.exports.getArgonStatus = getArgonStatus;
+module.exports.recordAccountStatus = recordAccountStatus;
+module.exports.getAllArgonAccounts = getAllArgonAccounts;

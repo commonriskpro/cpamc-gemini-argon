@@ -20,7 +20,7 @@ for (const dir of candidateNodeDirs) {
  * Executes turns via Google Chrome headless + Playwright without GUI windows.
  */
 
-const { getBestCookies, injectCookies, getSafariGoogleCookies, syncAuthFiles } = require("./cookie_sync");
+const { getBestCookies, injectCookies, getSafariGoogleCookies, syncAuthFiles, recordAccountStatus, getAllArgonAccounts, getArgonStatus } = require("./cookie_sync");
 const { chromium } = require("playwright-core");
 const crypto = require("crypto");
 
@@ -395,74 +395,103 @@ async function main() {
       }
     }
 
-    // Model selection if requested
-    const switcher = await page.waitForSelector(".input-area-switch", { timeout: 8000 }).catch(() => null);
-    if (switcher) {
-      const currentSwitcherText = (await switcher.innerText().catch(() => "")).trim();
+    // Intelligent Multi-Account Selection with Auto-Failover
+    const allAccounts = getAllArgonAccounts();
+    const requestedAuthuser = Number(request.authuser !== undefined && request.authuser !== null ? request.authuser : 0);
+    const candidateAccounts = [
+      ...allAccounts.filter(a => a.authuser === requestedAuthuser),
+      ...allAccounts.filter(a => a.authuser !== requestedAuthuser)
+    ];
+    if (candidateAccounts.length === 0) {
+      candidateAccounts.push({ authuser: requestedAuthuser, email: request.email || "" });
+    }
 
-      let targetModeSubstring = "";
-      if (upstreamModel.includes("argon") || upstreamModel.includes("4")) {
-        targetModeSubstring = "Argon";
-      } else if (upstreamModel.includes("pro")) {
-        targetModeSubstring = "Pro";
-      } else if (upstreamModel.includes("flash-lite")) {
-        targetModeSubstring = "Flash-Lite";
-      } else if (upstreamModel.includes("flash")) {
-        targetModeSubstring = "Flash";
+    let activeAccount = null;
+
+    for (const acc of candidateAccounts) {
+      const uStr = acc.authuser ? String(acc.authuser) : "";
+      const targetUrl = uStr ? `https://gemini.google.com/u/${uStr}/app` : "https://gemini.google.com/app";
+
+      const currentUrl = page.url();
+      const expectedPattern = uStr ? `/u/${uStr}/app` : "/app";
+      if (!currentUrl.includes(expectedPattern)) {
+        await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForTimeout(1200);
       }
 
-      if (targetModeSubstring) {
-        if (!currentSwitcherText.includes(targetModeSubstring)) {
-          try {
+      const switcher = await page.waitForSelector(".input-area-switch", { timeout: 6000 }).catch(() => null);
+      if (!switcher) continue;
+
+      const currentText = (await switcher.innerText().catch(() => "")).trim();
+      const targetSubstring = "Argon";
+
+      if (currentText.includes(targetSubstring)) {
+        activeAccount = acc;
+        recordAccountStatus(acc.email, acc.authuser, false, null);
+        break;
+      }
+
+      await switcher.click();
+      await page.waitForTimeout(400);
+      const option = await page.waitForSelector("[role='menuitem']:has-text('" + targetSubstring + "')", { timeout: 3000 }).catch(() => null);
+      if (!option) continue;
+
+      const optionInfo = await option.evaluate(el => {
+        const text = (el.innerText || "").trim();
+        const isDis = el.classList.contains("disabled") ||
+                     Boolean(el.querySelector(".disabled")) ||
+                     text.toLowerCase().includes("límite se restablece") ||
+                     text.toLowerCase().includes("limit reset");
+        return { isDis, text };
+      }).catch(() => ({ isDis: true, text: "" }));
+
+      if (optionInfo.isDis) {
+        let resetTime = "";
+        const m = optionInfo.text.match(/(?:restablece|resets?)\\s+(?:el\\s+)?([^\\n]+)/i);
+        if (m) resetTime = m[1].trim();
+        console.log(`[AutoBalancer] Account ${acc.email || "u/" + acc.authuser} rate-limited (${resetTime || "active limit"}). Rotating to next account...`);
+        recordAccountStatus(acc.email, acc.authuser, true, resetTime);
+        await page.keyboard.press("Escape").catch(() => {});
+        continue;
+      }
+
+      await page.evaluate(el => el.click(), option);
+      await page.waitForTimeout(600);
+      activeAccount = acc;
+      recordAccountStatus(acc.email, acc.authuser, false, null);
+      break;
+    }
+
+    if (!activeAccount) {
+      throw new Error("All connected Google accounts have reached their Gemini 4 Argon quota limits.");
+    }
+
+    // Apply reasoning effort if requested
+    if (request.reasoning_effort) {
+      const effort = String(request.reasoning_effort).toLowerCase();
+      let targetEffort = "";
+      if (effort === "low") targetEffort = "Low";
+      else if (effort === "medium") targetEffort = "Medium";
+      else if (effort === "high" || effort === "xhigh" || effort === "max") targetEffort = "High";
+
+      if (targetEffort) {
+        try {
+          const switcher = await page.waitForSelector(".input-area-switch", { timeout: 3000 }).catch(() => null);
+          if (switcher) {
             await switcher.click();
-            await page.waitForTimeout(600);
-            const option = await page.waitForSelector("[role='menuitem']:has-text('" + targetModeSubstring + "')", { timeout: 4000 }).catch(() => null);
-            if (option) {
-              const isDis = await option.evaluate(el => {
-                const text = (el.innerText || "").toLowerCase();
-                return el.classList.contains("disabled") ||
-                       Boolean(el.querySelector(".disabled")) ||
-                       text.includes("límite se restablece") ||
-                       text.includes("limit reset");
-              }).catch(() => false);
-              if (isDis) {
-                throw new Error("Gemini 4 Argon is rate-limited or disabled on " + (request.email || ("authuser " + authuser)));
+            await page.waitForTimeout(400);
+            const thinkingMenu = await page.waitForSelector("[role='menuitem']:has-text('Thinking'), [role='menuitem']:has-text('Pensamiento'), [role='menuitem']:has-text('Nivel de pensamiento')", { timeout: 3000 }).catch(() => null);
+            if (thinkingMenu) {
+              await thinkingMenu.click();
+              await page.waitForTimeout(400);
+              const effortOption = await page.waitForSelector(`[role='menuitem']:has-text('${targetEffort}')`, { timeout: 3000 }).catch(() => null);
+              if (effortOption) {
+                await effortOption.click();
+                await page.waitForTimeout(400);
               }
-              await page.evaluate(el => el.click(), option);
-              await page.waitForTimeout(1000);
-            }
-          } catch (err) {
-            if (err.message && err.message.includes("rate-limited or disabled")) {
-              throw err;
             }
           }
-        }
-
-        // Apply reasoning effort if requested
-        if (request.reasoning_effort) {
-          const effort = String(request.reasoning_effort).toLowerCase();
-          let targetEffort = "";
-          if (effort === "low") targetEffort = "Low";
-          else if (effort === "medium") targetEffort = "Medium";
-          else if (effort === "high" || effort === "xhigh" || effort === "max") targetEffort = "High";
-
-          if (targetEffort) {
-            try {
-              await switcher.click();
-              await page.waitForTimeout(500);
-              const thinkingMenu = await page.waitForSelector("[role='menuitem']:has-text('Thinking'), [role='menuitem']:has-text('Pensamiento'), [role='menuitem']:has-text('Nivel de pensamiento')", { timeout: 3000 }).catch(() => null);
-              if (thinkingMenu) {
-                await thinkingMenu.click();
-                await page.waitForTimeout(500);
-                const effortOption = await page.waitForSelector(`[role='menuitem']:has-text('${targetEffort}')`, { timeout: 3000 }).catch(() => null);
-                if (effortOption) {
-                  await effortOption.click();
-                  await page.waitForTimeout(500);
-                }
-              }
-            } catch (err) {}
-          }
-        }
+        } catch (err) {}
       }
     }
 
