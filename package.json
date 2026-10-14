@@ -1,0 +1,22 @@
+{
+  "name": "cpamc-gemini-argon",
+  "version": "1.0.0",
+  "description": "Native CPAMC plugin and headless runner for Gemini 4 Argon with autonomous synthetic tool calling",
+  "main": "gemini_runner.js",
+  "scripts": {
+    "test": "node -c gemini_runner.js"
+  },
+  "keywords": [
+    "cpamc",
+    "gemini",
+    "argon",
+    "codex",
+    "ai-agent",
+    "tool-calling"
+  ],
+  "author": "commonriskpro",
+  "license": "MIT",
+  "dependencies": {
+    "playwright-core": "^1.50.0"
+  }
+}

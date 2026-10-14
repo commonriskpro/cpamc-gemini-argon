@@ -1,0 +1,20 @@
+# Binaries and libraries
+*.dylib
+*.so
+*.dll
+*.h
+dist/
+
+# Node dependencies
+node_modules/
+package-lock.json
+
+# Operating System
+.DS_Store
+Thumbs.db
+
+# Local test/cookie files
+*cookies*.txt
+*cookies*.json
+*.env
+argon_prueba.txt
