@@ -20,6 +20,7 @@ for (const dir of candidateNodeDirs) {
  * Executes turns via Google Chrome headless + Playwright without GUI windows.
  */
 
+const { getBestCookies, injectCookies, getSafariGoogleCookies, syncAuthFiles } = require("./cookie_sync");
 const { chromium } = require("playwright-core");
 const crypto = require("crypto");
 
@@ -286,7 +287,7 @@ async function main() {
   const tools = request.tools || [];
   const credential = request.credential || "";
 
-  const rawCookies = parseCookiesInput(credential);
+  const rawCookies = getBestCookies(parseCookiesInput(credential));
   if (!rawCookies || rawCookies.length === 0) {
     console.error(JSON.stringify({ error: "No Google session cookies provided" }));
     process.exit(1);
@@ -361,25 +362,7 @@ async function main() {
       userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
     });
 
-    // Inject cookies
-    for (const c of rawCookies) {
-      if (!c.name || typeof c.value !== "string" || c.name.startsWith("__Host-") || c.name === "AEC" || c.name === "NID") continue;
-      let domain = c.domain || ".google.com";
-      if (!domain.startsWith(".")) domain = "." + domain;
-      let secure = Boolean(c.secure);
-      if (c.name.startsWith("__Secure-")) secure = true;
-
-      try {
-        await ctx.addCookies([{
-          name: c.name,
-          value: c.value,
-          domain,
-          path: c.path || "/",
-          secure,
-          httpOnly: Boolean(c.httpOnly)
-        }]);
-      } catch (e) {}
-    }
+    await injectCookies(ctx, rawCookies);
 
     const page = await ctx.newPage();
 
@@ -391,12 +374,25 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(2000);
 
-    const isSignedOut = await page.evaluate(() => {
+    let isSignedOut = await page.evaluate(() => {
       const text = document.body ? (document.body.innerText || "") : "";
       return document.body.classList.contains("viewer-signed-out") || text.includes("Sign in to save activity") || text.includes("Inicia sesion");
     });
     if (isSignedOut) {
-      throw new Error("Google session expired or signed out. Please log into gemini.google.com in your browser and update the CPAMC auth credentials.");
+      const fresh = getSafariGoogleCookies();
+      if (fresh && fresh.length > 0) {
+        await injectCookies(ctx, fresh);
+        syncAuthFiles(fresh);
+        await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForTimeout(2000);
+        isSignedOut = await page.evaluate(() => {
+          const text = document.body ? (document.body.innerText || "") : "";
+          return document.body.classList.contains("viewer-signed-out") || text.includes("Sign in to save activity") || text.includes("Inicia sesion");
+        });
+      }
+      if (isSignedOut) {
+        throw new Error("Google session expired or signed out. Please make sure you are signed into Google in Safari.");
+      }
     }
 
     // Model selection if requested

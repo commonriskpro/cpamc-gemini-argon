@@ -31,6 +31,7 @@ for (const dir of candidateNodeDirs) {
 
 const http = require("http");
 const crypto = require("crypto");
+const { getBestCookies, injectCookies, getSafariGoogleCookies, syncAuthFiles } = require("./cookie_sync");
 const { chromium } = require("playwright-core");
 
 const PORT = parseInt(process.env.GEMINI_DAEMON_PORT || "8319", 10);
@@ -257,13 +258,13 @@ class BrowserDaemon {
   }
 
   async initBrowser(credential, authuser) {
-    const rawCookies = parseCookiesInput(credential);
+    const rawCookies = getBestCookies(parseCookiesInput(credential));
     if (!rawCookies || rawCookies.length === 0) {
       throw new Error("No Google session cookies provided");
     }
 
     const uStr = (authuser !== undefined && authuser !== null && authuser !== "") ? String(authuser) : "";
-    const credHash = crypto.createHash("sha256").update((typeof credential === "string" ? credential : JSON.stringify(credential)) + ":" + uStr).digest("hex");
+    const credHash = crypto.createHash("sha256").update(JSON.stringify(rawCookies) + ":" + uStr).digest("hex");
 
     if (this.browser && this.context && this.page && this.currentCredHash === credHash) {
       return; // Already initialized and warm
@@ -289,36 +290,32 @@ class BrowserDaemon {
       userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
     });
 
-    for (const c of rawCookies) {
-      if (!c.name || typeof c.value !== "string" || c.name.startsWith("__Host-") || c.name === "AEC" || c.name === "NID") continue;
-      let domain = c.domain || ".google.com";
-      if (!domain.startsWith(".")) domain = "." + domain;
-      let secure = Boolean(c.secure);
-      if (c.name.startsWith("__Secure-")) secure = true;
-
-      try {
-        await this.context.addCookies([{
-          name: c.name,
-          value: c.value,
-          domain,
-          path: c.path || "/",
-          secure,
-          httpOnly: Boolean(c.httpOnly)
-        }]);
-      } catch (e) {}
-    }
+    await injectCookies(this.context, rawCookies);
 
     this.page = await this.context.newPage();
     const targetUrl = uStr ? `https://gemini.google.com/u/${uStr}/app` : "https://gemini.google.com/app";
     await this.page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     await this.page.waitForTimeout(2000);
 
-    const isSignedOut = await this.page.evaluate(() => {
+    let isSignedOut = await this.page.evaluate(() => {
       const text = document.body ? (document.body.innerText || "") : "";
       return document.body.classList.contains("viewer-signed-out") || text.includes("Sign in to save activity") || text.includes("Inicia sesion");
     });
     if (isSignedOut) {
-      throw new Error("Google session expired or signed out. Please log into gemini.google.com in your browser and update the CPAMC auth credentials.");
+      const fresh = getSafariGoogleCookies();
+      if (fresh && fresh.length > 0) {
+        await injectCookies(this.context, fresh);
+        syncAuthFiles(fresh);
+        await this.page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await this.page.waitForTimeout(2000);
+        isSignedOut = await this.page.evaluate(() => {
+          const text = document.body ? (document.body.innerText || "") : "";
+          return document.body.classList.contains("viewer-signed-out") || text.includes("Sign in to save activity") || text.includes("Inicia sesion");
+        });
+      }
+      if (isSignedOut) {
+        throw new Error("Google session expired or signed out. Please make sure you are signed into Google in Safari.");
+      }
     }
     this.currentCredHash = credHash;
   }
