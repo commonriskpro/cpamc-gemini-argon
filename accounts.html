@@ -1,262 +1,463 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="30">
-<title>Gemini 4 Argon · Panel de Cuentas y Cuotas</title>
+<meta http-equiv="refresh" content="300">
+<title>Gemini 4 Argon · Cuotas y Cuentas</title>
 <style>
 :root {
-  color-scheme: light dark;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: #f1f5f9;
-  background: #0b0f19;
-}
-* { box-sizing: border-box; }
-body { margin: 0; padding: clamp(20px, 4vw, 48px); }
-main { max-width: 980px; margin: auto; }
+  --bg-app: #0d1117;
+  --bg-primary: #161b22;
+  --bg-card: rgba(22, 27, 34, 0.85);
+  --bg-card-hover: rgba(30, 38, 48, 0.95);
+  --bg-surface: #21262d;
+  --bg-tag: #1f242c;
+  --border-color: #30363d;
+  --border-hover: #484f58;
+  
+  --text-primary: #f0f6fc;
+  --text-secondary: #c9d1d9;
+  --text-muted: #8b949e;
+  --text-quaternary: #6e7681;
+  
+  --brand-gemini: #38bdf8;
 
-.header {
+  --meter-bg: #21262d;
+  --meter-green: #238636;
+  --meter-warning: #d29922;
+  --meter-critical: #f85149;
+  --meter-text-green: #3fb950;
+  --meter-text-warning: #e3b341;
+  --meter-text-critical: #ff7b72;
+  
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --radius-card: 14px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  padding: 24px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Header */
+.page-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 28px;
+  gap: 12px;
 }
-.eyebrow {
+
+.title-wrap h1 {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.meta-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  margin-top: 4px;
+}
+
+.stat-dot {
+  width: 4px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--meter-green);
+  display: inline-block;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auto-refresh-tag {
+  font-size: 11px;
+  color: var(--text-quaternary);
+  font-family: var(--font-mono);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.btn-refresh-all {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: 600 12px ui-monospace, SFMono-Regular, monospace;
-  letter-spacing: .1em;
-  color: #38bdf8;
-  text-transform: uppercase;
-  background: rgba(56, 189, 248, 0.12);
-  padding: 4px 10px;
-  border-radius: 9999px;
-  border: 1px solid rgba(56, 189, 248, 0.25);
-}
-.pulse-dot {
-  width: 7px;
-  height: 7px;
-  background: #38bdf8;
-  border-radius: 50%;
-  box-shadow: 0 0 8px #38bdf8;
-  animation: pulse 2s infinite;
-}
-@keyframes pulse {
-  0% { transform: scale(0.95); opacity: 0.8; }
-  50% { transform: scale(1.2); opacity: 1; }
-  100% { transform: scale(0.95); opacity: 0.8; }
-}
-
-h1 {
-  font-size: clamp(28px, 4vw, 36px);
-  font-weight: 800;
-  letter-spacing: -.03em;
-  margin: 12px 0 8px;
-  background: linear-gradient(135deg, #ffffff 40%, #94a3b8);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-p.subtitle {
-  margin: 0;
-  font-size: 15px;
-  color: #94a3b8;
-  line-height: 1.5;
-}
-
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
-  margin-bottom: 32px;
-}
-.stat-card {
-  background: rgba(30, 41, 59, 0.5);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  padding: 20px;
-  backdrop-filter: blur(10px);
-}
-.stat-label {
-  font-size: 13px;
+  background: #ffffff;
+  color: #0d1117;
+  border: 1px solid transparent;
+  font-size: 12.5px;
   font-weight: 600;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: .05em;
-  margin-bottom: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
 }
-.stat-value {
-  font-size: 32px;
-  font-weight: 800;
-  letter-spacing: -.02em;
-  color: #f8fafc;
+.btn-refresh-all:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
 }
-.stat-value.active { color: #34d399; }
-.stat-value.limited { color: #f59e0b; }
+.btn-refresh-all:active {
+  transform: translateY(0);
+}
 
-.section-title {
-  font-size: 19px;
-  font-weight: 700;
-  margin: 0 0 16px;
-  color: #f8fafc;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.accounts-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-  gap: 16px;
-  margin-bottom: 32px;
-}
-.account-card {
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 14px;
-  padding: 20px;
+/* Throughput & Availability Panel */
+.throughput-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-card);
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  transition: transform 0.15s ease, border-color 0.15s ease;
-}
-.account-card:hover {
-  transform: translateY(-2px);
-  border-color: #475569;
-}
-.account-card.is-limited {
-  border-color: rgba(245, 158, 11, 0.4);
-  background: linear-gradient(180deg, #1e293b 0%, rgba(245, 158, 11, 0.05) 100%);
+  gap: 12px;
 }
 
-.account-header {
+.throughput-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
-.account-email {
+
+.throughput-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.throughput-title {
+  font-size: 13px;
   font-weight: 700;
-  font-size: 15px;
-  color: #f8fafc;
-  word-break: break-all;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
-.account-sub {
-  font-size: 12px;
-  color: #64748b;
+
+.throughput-kpi-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.kpi-badge {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+}
+
+.kpi-label {
+  color: var(--text-muted);
+}
+.kpi-val {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.kpi-val.success { color: var(--meter-text-green); }
+.kpi-val.warning { color: var(--meter-text-warning); }
+
+.throughput-desc {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  border-top: 1px dashed rgba(48, 54, 61, 0.6);
+  padding-top: 10px;
+}
+
+/* Cards Grid */
+.cards-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  align-items: stretch;
+}
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+  transform: translateY(-1px);
+}
+
+.card.is-limited {
+  border-color: rgba(210, 153, 34, 0.4);
+  background: linear-gradient(180deg, var(--bg-card) 0%, rgba(210, 153, 34, 0.05) 100%);
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.card-title-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.file-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
+}
+
+.prefix-row {
+  height: 18px;
+  line-height: 18px;
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prefix-label {
+  color: var(--text-quaternary);
+}
+.prefix-text {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+}
+
+/* Quota Meter */
+.meter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.meter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11.5px;
+}
+
+.meter-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meter-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.meta-percent {
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.meta-reset-soon {
+  color: var(--meter-text-warning);
+  font-weight: 600;
+}
+
+/* Progress Track */
+.track {
+  width: 100%;
+  height: 4px;
+  background: var(--meter-bg);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--meter-green);
+  transition: width 0.3s ease;
+}
+
+.fill.warning {
+  background: var(--meter-warning);
+}
+
+.fill.critical {
+  background: var(--meter-critical);
+}
+
+/* Reset Notification */
+.reset-alert {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--meter-text-warning);
+  background: rgba(210, 153, 34, 0.1);
+  border: 1px dashed rgba(210, 153, 34, 0.3);
+  padding: 5px 8px;
+  border-radius: 6px;
   margin-top: 2px;
 }
 
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 9999px;
-  white-space: nowrap;
-}
-.badge-active {
-  background: rgba(52, 211, 153, 0.15);
-  color: #34d399;
-  border: 1px solid rgba(52, 211, 153, 0.3);
-}
-.badge-limited {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.3);
-}
-
-.reset-banner {
-  margin-top: 10px;
-  padding: 8px 12px;
-  background: rgba(245, 158, 11, 0.1);
-  border-radius: 8px;
-  font-size: 12px;
-  color: #fde68a;
-  border: 1px dashed rgba(245, 158, 11, 0.3);
-}
-
-.meta-footer {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+/* Card Action Footer */
+.card-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 12px;
-  color: #64748b;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(48, 54, 61, 0.5);
+  gap: 8px;
+  font-size: 11px;
 }
 
-.system-card {
-  background: rgba(30, 41, 59, 0.4);
-  border: 1px solid #334155;
-  border-radius: 14px;
-  padding: 20px 24px;
-  margin-top: 24px;
-  font-size: 14px;
-  color: #94a3b8;
-  line-height: 1.6;
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  color: var(--text-quaternary);
 }
-.system-card strong { color: #f8fafc; }
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
-@media(prefers-color-scheme: light) {
-  :root { color: #0f172a; background: #f8fafc; }
-  h1 { background: linear-gradient(135deg, #0f172a 40%, #475569); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-  p.subtitle { color: #475569; }
-  .stat-card { background: #ffffff; border-color: #e2e8f0; }
-  .stat-label { color: #64748b; }
-  .stat-value { color: #0f172a; }
-  .section-title { color: #0f172a; }
-  .account-card { background: #ffffff; border-color: #e2e8f0; }
-  .account-card:hover { border-color: #cbd5e1; }
-  .account-email { color: #0f172a; }
-  .system-card { background: #ffffff; border-color: #e2e8f0; color: #475569; }
-  .system-card strong { color: #0f172a; }
-  .meta-footer { border-top-color: #f1f5f9; }
-}
+@keyframes spin { 100% { transform: rotate(360deg); } }
+.spinning { animation: spin 1s linear infinite; }
 </style>
 </head>
 <body>
-<main>
-  <div class="header">
-    <div>
-      <div class="eyebrow"><span class="pulse-dot"></span> CPAMC · Auto-Balancer Multi-Cuenta</div>
-      <h1>Gemini 4 Argon · Cuotas y Estado</h1>
-      <p class="subtitle">Monitoreo en tiempo real de cuentas conectadas, balanceador de carga y rotación automática ante límites de cuota web.</p>
+<div class="page">
+  <!-- Header -->
+  <header class="page-header">
+    <div class="title-wrap">
+      <h1>Gemini 4 Argon · Control de Cuotas</h1>
+      <div class="meta-stats">
+        <span class="stat-dot"></span>
+        <span><strong id="stat-total" style="color:var(--text-primary);">{{TOTAL_COUNT}}</strong> cuentas de Google</span>
+        <span>&middot;</span>
+        <span><strong id="stat-active" style="color:var(--meter-text-green);">{{ACTIVE_COUNT}}</strong> disponibles</span>
+        <span>&middot;</span>
+        <span><strong id="stat-limited" style="color:var(--meter-text-warning);">{{LIMITED_COUNT}}</strong> en espera</span>
+      </div>
     </div>
-  </div>
+    <div class="header-actions">
+      <span class="auto-refresh-tag">Auto: 5m</span>
+      <button id="btn-refresh-all" class="btn-refresh-all" onclick="refreshManual()">
+        <span id="refresh-icon">🔄</span> Actualizar ahora
+      </button>
+    </div>
+  </header>
 
-  <div class="stats-grid">
-    <div class="stat-card">
-      <div class="stat-label">Cuentas Totales</div>
-      <div class="stat-value">{{TOTAL_COUNT}}</div>
+  <!-- Throughput & Availability Panel -->
+  <section class="throughput-panel">
+    <div class="throughput-header">
+      <div class="throughput-title-wrap">
+        <span style="color:#38bdf8;">⚡</span>
+        <span class="throughput-title">Auto-Balanceador &amp; Disponibilidad Multi-Cuenta</span>
+      </div>
+      <div class="throughput-kpi-row">
+        <div class="kpi-badge">
+          <span class="kpi-label">Total Cuentas:</span>
+          <span class="kpi-val">{{TOTAL_COUNT}}</span>
+        </div>
+        <div class="kpi-badge">
+          <span class="kpi-label">Cuota Activa:</span>
+          <span class="kpi-val success">{{ACTIVE_COUNT}}</span>
+        </div>
+        <div class="kpi-badge">
+          <span class="kpi-label">Límite Temporal:</span>
+          <span class="kpi-val warning">{{LIMITED_COUNT}}</span>
+        </div>
+        <div class="kpi-badge">
+          <span class="kpi-label">JIT Safari:</span>
+          <span class="kpi-val" style="color:#38bdf8;">VIGENTE</span>
+        </div>
+      </div>
     </div>
-    <div class="stat-card">
-      <div class="stat-label">Cuentas Activas</div>
-      <div class="stat-value active">{{ACTIVE_COUNT}}</div>
+    <div class="throughput-desc">
+      El runner de CPAMC administra una cascada continua entre las cuentas conectadas. Si una cuenta agota su cuota web de Argon 4, salta de inmediato a la siguiente sin interrumpir tus turnos en Codex. Las sesiones se sincronizan de forma desatendida desde Safari.
     </div>
-    <div class="stat-card">
-      <div class="stat-label">En Límite Temporal</div>
-      <div class="stat-value limited">{{LIMITED_COUNT}}</div>
-    </div>
-  </div>
+  </section>
 
-  <div class="section-title">
-    <span>Cuentas de Google Vinculadas</span>
-    <span style="font-size:13px; font-weight:500; color:#64748b;">Actualización automática cada 30s</span>
-  </div>
-
-  <div class="accounts-grid">
+  <!-- Cards Grid -->
+  <div class="cards-grid">
     {{CARDS_HTML}}
   </div>
+</div>
 
-  <div class="system-card">
-    <strong>Balanceo Inteligente Activo:</strong> Si una cuenta alcanza el límite de uso web de Gemini 4 Argon, el runner de CPAMC salta automáticamente a la siguiente cuenta disponible en el mismo navegador sin interrumpir tus turnos en Codex. Las sesiones de cookies se sincronizan periódicamente de forma desatendida desde Safari.
-  </div>
-</main>
+<script>
+function refreshManual() {
+  const icon = document.getElementById("refresh-icon");
+  const btn = document.getElementById("btn-refresh-all");
+  if (icon) icon.classList.add("spinning");
+  if (btn) btn.style.opacity = "0.7";
+  setTimeout(function() {
+    window.location.reload();
+  }, 300);
+}
+</script>
 </body>
 </html>

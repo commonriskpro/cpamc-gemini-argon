@@ -158,42 +158,99 @@ func renderAccountsDashboard() string {
 			activeCount++
 		}
 
-		cardClass := "account-card"
-		badgeHTML := `<span class="badge badge-active">● Cuota Activa</span>`
-		resetBannerHTML := ""
+		cardClass := "card"
+		badgeHTML := `<span class="kpi-badge" style="color:var(--meter-text-green); border-color:rgba(35,134,54,0.4);"><span style="color:var(--meter-text-green);">●</span> Activa</span>`
+		percentColor := "color:var(--meter-text-green);"
+		quotaPercent := "100%"
+		quotaFillClass := "fill"
+		quotaFillWidth := "100%"
+		quotaStatusText := "Disponible"
+		resetAlertHTML := ""
+		footerStatusColor := "var(--meter-text-green)"
+		footerStatusText := "● En Rotación"
 
 		if isLimited {
 			cardClass += " is-limited"
-			badgeHTML = `<span class="badge badge-limited">⏳ Límite Alcanzado</span>`
+			badgeHTML = `<span class="kpi-badge" style="color:var(--meter-text-warning); border-color:rgba(210,153,34,0.4);"><span style="color:var(--meter-text-warning);">⏳</span> Limitada</span>`
+			percentColor = "color:var(--meter-text-warning);"
+			quotaPercent = "0%"
+			quotaFillClass = "fill critical"
+			quotaFillWidth = "6%"
+			quotaStatusText = "Agotada"
+			footerStatusColor = "var(--meter-text-warning)"
+			footerStatusText = "⏳ En enfriamiento"
 			resetStr := it.ResetTime
 			if resetStr == "" {
 				resetStr = "Próximo ciclo web"
 			}
-			resetBannerHTML = fmt.Sprintf(`<div class="reset-banner">Se restablece: <strong>%s</strong></div>`, resetStr)
+			resetAlertHTML = fmt.Sprintf(`<div class="reset-alert"><span>⏳</span><span>Se restablece: <strong>%s</strong></span></div>`, resetStr)
 		}
 
 		cardsBuilder.WriteString(fmt.Sprintf(`
     <div class="%s">
-      <div>
-        <div class="account-header">
-          <div>
-            <div class="account-email">%s</div>
-            <div class="account-sub">Sesión u/%d</div>
+      <div class="card-head">
+        <div style="font-size:18px; line-height:1; color:#38bdf8;">⚡</div>
+        <div class="card-title-col">
+          <div class="file-name" title="%s">%s</div>
+          <div class="prefix-row">
+            <span class="prefix-label">Sesión:</span>
+            <span class="prefix-text">u/%d</span>
+            <span style="color:var(--border-color);">&bull;</span>
+            <span class="prefix-label">Provider:</span>
+            <span class="prefix-text">gemini-argon</span>
           </div>
-          %s
         </div>
         %s
       </div>
-      <div class="meta-footer">
-        <span>Google Gemini Web</span>
-        <span>Modo Argon 4</span>
+      <div class="card-body">
+        <div class="meter-row">
+          <div class="meter-header">
+            <span class="meter-label">Cuota Gemini 4 Argon</span>
+            <div class="meter-meta">
+              <span class="meta-percent" style="%s">%s</span>
+              <span class="meta-reset-soon">%s</span>
+            </div>
+          </div>
+          <div class="track">
+            <div class="%s" style="width: %s;"></div>
+          </div>
+          %s
+        </div>
+        <div class="meter-row">
+          <div class="meter-header">
+            <span class="meter-label">Sesión Safari / Cookies</span>
+            <div class="meter-meta">
+              <span class="meta-percent" style="color:var(--meter-text-green);">Vigente</span>
+            </div>
+          </div>
+          <div class="track">
+            <div class="fill" style="width: 100%%;"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card-footer">
+        <div class="footer-left">
+          <span>Modo:</span>
+          <span style="color:var(--text-secondary); font-weight:600;">Argon 4 Thinking</span>
+        </div>
+        <div class="footer-right">
+          <span style="font-family:var(--font-mono); font-size:11px; color:%s;">%s</span>
+        </div>
       </div>
     </div>`,
 			cardClass,
 			it.Email,
+			it.Email,
 			it.AuthUser,
 			badgeHTML,
-			resetBannerHTML,
+			percentColor,
+			quotaPercent,
+			quotaStatusText,
+			quotaFillClass,
+			quotaFillWidth,
+			resetAlertHTML,
+			footerStatusColor,
+			footerStatusText,
 		))
 	}
 
