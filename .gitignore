@@ -18,3 +18,4 @@ Thumbs.db
 *cookies*.json
 *.env
 argon_prueba.txt
+release_binaries/
