@@ -256,13 +256,14 @@ class BrowserDaemon {
     this.queue = [];
   }
 
-  async initBrowser(credential) {
+  async initBrowser(credential, authuser) {
     const rawCookies = parseCookiesInput(credential);
     if (!rawCookies || rawCookies.length === 0) {
       throw new Error("No Google session cookies provided");
     }
 
-    const credHash = crypto.createHash("sha256").update(typeof credential === "string" ? credential : JSON.stringify(credential)).digest("hex");
+    const uStr = (authuser !== undefined && authuser !== null && authuser !== "") ? String(authuser) : "";
+    const credHash = crypto.createHash("sha256").update((typeof credential === "string" ? credential : JSON.stringify(credential)) + ":" + uStr).digest("hex");
 
     if (this.browser && this.context && this.page && this.currentCredHash === credHash) {
       return; // Already initialized and warm
@@ -308,7 +309,8 @@ class BrowserDaemon {
     }
 
     this.page = await this.context.newPage();
-    await this.page.goto("https://gemini.google.com/app", { waitUntil: "domcontentloaded", timeout: 30000 });
+    const targetUrl = uStr ? `https://gemini.google.com/u/${uStr}/app` : "https://gemini.google.com/app";
+    await this.page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     await this.page.waitForTimeout(2000);
 
     const isSignedOut = await this.page.evaluate(() => {
@@ -321,14 +323,12 @@ class BrowserDaemon {
     this.currentCredHash = credHash;
   }
 
-  async executeTurn({ model, upstream_model, messages, tools, credential }) {
+  async executeTurn({ model, upstream_model, messages, tools, credential, authuser, email, reasoning_effort }) {
     this._resetIdleTimer();
-    await this.initBrowser(credential);
+    await this.initBrowser(credential, authuser);
 
     const requestedModel = model || "web-gemini/gemini-4-argon";
     const upstreamModel = upstream_model || "gemini-4-argon";
-
-
 
     try {
       // Check mode switcher
@@ -340,20 +340,58 @@ class BrowserDaemon {
         else if (upstreamModel.includes("flash-lite")) targetSubstring = "Flash-Lite";
         else if (upstreamModel.includes("flash")) targetSubstring = "Flash";
 
-        if (targetSubstring && !currentText.includes(targetSubstring)) {
-          try {
-            await switcher.click();
-            await this.page.waitForTimeout(400);
-            const option = await this.page.waitForSelector("[role='menuitem']:has-text('" + targetSubstring + "')", { timeout: 3000 });
-            if (option) {
-              const isDisabled = await option.evaluate(el => el.classList.contains("disabled") || !!el.querySelector(".disabled")).catch(() => false);
-              if (isDisabled) {
-                throw new Error("Gemini 4 Argon is disabled on this Google account. Please ensure your account has active Argon access.");
+        if (targetSubstring) {
+          if (!currentText.includes(targetSubstring)) {
+            try {
+              await switcher.click();
+              await this.page.waitForTimeout(400);
+              const option = await this.page.waitForSelector("[role='menuitem']:has-text('" + targetSubstring + "')", { timeout: 3000 });
+              if (option) {
+                const isDis = await option.evaluate(el => {
+                  const text = (el.innerText || "").toLowerCase();
+                  return el.classList.contains("disabled") ||
+                         Boolean(el.querySelector(".disabled")) ||
+                         text.includes("límite se restablece") ||
+                         text.includes("limit reset");
+                }).catch(() => false);
+                if (isDis) {
+                  throw new Error("Gemini 4 Argon is rate-limited or disabled on " + (email || ("authuser " + authuser)));
+                }
+                await this.page.evaluate(el => el.click(), option);
+                await this.page.waitForTimeout(600);
               }
-              await this.page.evaluate(el => el.click(), option);
-              await this.page.waitForTimeout(600);
+            } catch (err) {
+              if (err.message && err.message.includes("rate-limited or disabled")) {
+                throw err;
+              }
             }
-          } catch (e) {}
+          }
+
+          // Reasoning effort handling
+          if (reasoning_effort) {
+            const effort = String(reasoning_effort).toLowerCase();
+            let targetEffort = "";
+            if (effort === "low") targetEffort = "Low";
+            else if (effort === "medium") targetEffort = "Medium";
+            else if (effort === "high" || effort === "xhigh" || effort === "max") targetEffort = "High";
+
+            if (targetEffort) {
+              try {
+                await switcher.click();
+                await this.page.waitForTimeout(500);
+                const thinkingMenu = await this.page.waitForSelector("[role='menuitem']:has-text('Thinking'), [role='menuitem']:has-text('Pensamiento'), [role='menuitem']:has-text('Nivel de pensamiento')", { timeout: 3000 }).catch(() => null);
+                if (thinkingMenu) {
+                  await thinkingMenu.click();
+                  await this.page.waitForTimeout(500);
+                  const effortOption = await this.page.waitForSelector(`[role='menuitem']:has-text('${targetEffort}')`, { timeout: 3000 }).catch(() => null);
+                  if (effortOption) {
+                    await effortOption.click();
+                    await this.page.waitForTimeout(500);
+                  }
+                }
+              } catch (err) {}
+            }
+          }
         }
       }
 

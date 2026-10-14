@@ -383,7 +383,12 @@ async function main() {
 
     const page = await ctx.newPage();
 
-    await page.goto("https://gemini.google.com/app", { waitUntil: "domcontentloaded", timeout: 30000 });
+    const authuser = (request.authuser !== undefined && request.authuser !== null && request.authuser !== "")
+      ? String(request.authuser)
+      : "";
+    const targetUrl = authuser ? `https://gemini.google.com/u/${authuser}/app` : "https://gemini.google.com/app";
+
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(2000);
 
     const isSignedOut = await page.evaluate(() => {
@@ -410,21 +415,57 @@ async function main() {
         targetModeSubstring = "Flash";
       }
 
-      if (targetModeSubstring && !currentSwitcherText.includes(targetModeSubstring)) {
-        try {
-          await switcher.click();
-          await page.waitForTimeout(600);
-          const option = await page.waitForSelector("[role='menuitem']:has-text('" + targetModeSubstring + "')", { timeout: 4000 }).catch(() => null);
-          if (option) {
-            const isDisabled = await option.evaluate(el => el.classList.contains("disabled") || !!el.querySelector(".disabled")).catch(() => false);
-            if (isDisabled) {
-              throw new Error("Gemini 4 Argon is disabled on this Google account. Please ensure your account has active Argon access.");
+      if (targetModeSubstring) {
+        if (!currentSwitcherText.includes(targetModeSubstring)) {
+          try {
+            await switcher.click();
+            await page.waitForTimeout(600);
+            const option = await page.waitForSelector("[role='menuitem']:has-text('" + targetModeSubstring + "')", { timeout: 4000 }).catch(() => null);
+            if (option) {
+              const isDis = await option.evaluate(el => {
+                const text = (el.innerText || "").toLowerCase();
+                return el.classList.contains("disabled") ||
+                       Boolean(el.querySelector(".disabled")) ||
+                       text.includes("límite se restablece") ||
+                       text.includes("limit reset");
+              }).catch(() => false);
+              if (isDis) {
+                throw new Error("Gemini 4 Argon is rate-limited or disabled on " + (request.email || ("authuser " + authuser)));
+              }
+              await page.evaluate(el => el.click(), option);
+              await page.waitForTimeout(1000);
             }
-            await page.evaluate(el => el.click(), option);
-            await page.waitForTimeout(1000);
+          } catch (err) {
+            if (err.message && err.message.includes("rate-limited or disabled")) {
+              throw err;
+            }
           }
-        } catch (err) {
-          // If mode switcher fails, proceed with default active mode
+        }
+
+        // Apply reasoning effort if requested
+        if (request.reasoning_effort) {
+          const effort = String(request.reasoning_effort).toLowerCase();
+          let targetEffort = "";
+          if (effort === "low") targetEffort = "Low";
+          else if (effort === "medium") targetEffort = "Medium";
+          else if (effort === "high" || effort === "xhigh" || effort === "max") targetEffort = "High";
+
+          if (targetEffort) {
+            try {
+              await switcher.click();
+              await page.waitForTimeout(500);
+              const thinkingMenu = await page.waitForSelector("[role='menuitem']:has-text('Thinking'), [role='menuitem']:has-text('Pensamiento'), [role='menuitem']:has-text('Nivel de pensamiento')", { timeout: 3000 }).catch(() => null);
+              if (thinkingMenu) {
+                await thinkingMenu.click();
+                await page.waitForTimeout(500);
+                const effortOption = await page.waitForSelector(`[role='menuitem']:has-text('${targetEffort}')`, { timeout: 3000 }).catch(() => null);
+                if (effortOption) {
+                  await effortOption.click();
+                  await page.waitForTimeout(500);
+                }
+              }
+            } catch (err) {}
+          }
         }
       }
     }

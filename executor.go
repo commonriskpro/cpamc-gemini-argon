@@ -166,7 +166,7 @@ func runStandalone(ctx context.Context, inBytes []byte) ([]byte, error) {
 }
 
 func execute(ctx context.Context, req executorRequest, isStream bool) (executorResponse, error) {
-	credential, err := readCookieCredential(req.StorageJSON)
+	credential, authUser, email, err := readStorageCredential(req.StorageJSON)
 	if err != nil {
 		return executorResponse{}, err
 	}
@@ -181,7 +181,7 @@ func execute(ctx context.Context, req executorRequest, isStream bool) (executorR
 	if err := validateRequest(body, requestedModel); err != nil {
 		return executorResponse{}, err
 	}
-	payload, err := runGemini(ctx, credential, body, "gemini-4-argon", requestedModel)
+	payload, err := runGemini(ctx, credential, authUser, email, body, "gemini-4-argon", requestedModel)
 	if err != nil {
 		return executorResponse{}, err
 	}
@@ -191,12 +191,15 @@ func execute(ctx context.Context, req executorRequest, isStream bool) (executorR
 	}, nil
 }
 
-func runGemini(ctx context.Context, credential string, body chatRequest, upstreamModel, requestedModel string) ([]byte, error) {
+func runGemini(ctx context.Context, credential string, authUser any, email string, body chatRequest, upstreamModel, requestedModel string) ([]byte, error) {
 	runnerInput := map[string]any{
-		"model":          requestedModel,
-		"upstream_model": upstreamModel,
-		"messages":       body.Messages,
-		"credential":     credential,
+		"model":            requestedModel,
+		"upstream_model":   upstreamModel,
+		"messages":         body.Messages,
+		"credential":       credential,
+		"authuser":         authUser,
+		"email":            email,
+		"reasoning_effort": body.ReasoningEffort,
 	}
 	if len(body.Tools) > 0 && string(body.Tools) != "null" {
 		var toolsParsed any
@@ -224,6 +227,23 @@ func runGemini(ctx context.Context, credential string, body chatRequest, upstrea
 
 	// 3. Fallback: Standalone runner invocation
 	return runStandalone(ctx, inBytes)
+}
+
+func readStorageCredential(storage []byte) (string, any, string, error) {
+	var data map[string]any
+	if len(storage) == 0 || json.Unmarshal(storage, &data) != nil {
+		return "", nil, "", errors.New("invalid storage payload")
+	}
+	val, ok := data["cookie"].(string)
+	if !ok || strings.TrimSpace(val) == "" {
+		return "", nil, "", errors.New("session cookies are missing in credential")
+	}
+	var authUser any
+	if u, ok := data["authuser"]; ok {
+		authUser = u
+	}
+	email, _ := data["email"].(string)
+	return val, authUser, email, nil
 }
 
 func geminiStreamChunks(payload []byte, model string) ([]streamChunk, error) {
